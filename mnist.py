@@ -378,3 +378,4 @@ if __name__ == '__main__':
                         itr // batches_per_epoch, batch_time_meter.val, batch_time_meter.avg, f_nfe_meter.avg,
                         b_nfe_meter.avg, train_acc, val_acc)
                 )
+

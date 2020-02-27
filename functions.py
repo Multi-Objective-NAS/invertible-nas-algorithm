@@ -49,29 +49,30 @@ def encode(mat, ops):
 
 
 def max_index(output):
-    def find_max_index(ls):
-        return ls.index(max(ls))
+
+    assert output.shape == (1, 9, 18)
 
     encoded = []
-    outputs = [output[i: i + constants.EMBED_SIZE] for i in range(0, len(output), constants.EMBED_SIZE)]
+    outputs = [output_ for output_ in output[0]]
+
     for output in outputs:
         embed = [0 for _ in range(constants.EMBED_SIZE)]
-        inbound, op, outbound = find_max_index(output[:7]), find_max_index(output[7:-7]), find_max_index(output[-7:])
+        inbound, op, outbound = np.argmax(output[:7]), np.argmax(output[7:-7]), np.argmax(output[-7:])
         embed[inbound] = 1
         embed[7 + op] = 1
         embed[7 + len(constants.ALLOWED_OPS) + outbound] = 1
-        encoded += embed
+        assert np.sum(np.array(embed)) == 3
+        encoded.append(embed)
 
-    assert np.sum(np.array(encoded)) == 3
+    assert np.array(encoded).shape == (9, constants.EMBED_SIZE)
     return encoded
 
-'''
+
 def decode(encoded):
     mat = np.zeros((7, 7))
     op = [constants.INPUT] + [constants.CONV3X3 for _ in range(5)] + [constants.OUTPUT]
 
-    outputs = [output[i: i + constants.EMBED_SIZE] for i in range(0, len(output), constants.EMBED_SIZE)]
-    for embed in outputs:
+    for embed in encoded:
         inbound, op, outbound = np.nonzero(np.array(embed))[0]
         op -= 7
         outbound -= (7 + len(constants.ALLOWED_OPS))
@@ -79,7 +80,7 @@ def decode(encoded):
         op[outbound] = constants.ALLOWED_OPS[op]
 
     return mat.tolist(), op
-'''
+
 
 '''
 Generate Data
