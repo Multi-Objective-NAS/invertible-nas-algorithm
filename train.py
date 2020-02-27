@@ -13,23 +13,23 @@ import torchvision.transforms as transforms
 import constants
 import sys
 import time
-from torchdiffeq import odeint
+import psutil
 
 # device = torch.device('cuda:0')
 DEVICE = torch.device('cpu')
 
-train_dataset, test_dataset, train_eval_dataset = f.generate_data(constants.BATCH_SIZE)
+train_dataloader, test_dataloader, val_dataloader = f.train_val_test_split(batch_size=constants.BATCH_SIZE, validation_ratio=0.1, test_ratio=0.1)
 print("Completed data generation")
-print("Size is", len(train_dataset))
 
 input_size = 9 * constants.EMBED_SIZE
 feature_layers = [f.ODEBlock(f.ODEfunc(9))]
-fc_layers = [f.Flatten(), nn.Linear(input_size, 2)]
+fc_layers = [f.norm(9), nn.ReLU(inplace=True), nn.AdaptiveAvgPool1d(1), f.Flatten(), nn.Linear(9, 2)]
+
 model = nn.Sequential(*feature_layers, *fc_layers).to(DEVICE)
 
 criterion = nn.MSELoss().to(DEVICE)
 
-batches_per_epoch = len(train_dataset) // constants.BATCH_SIZE
+batches_per_epoch = (train_dataloader.end - train_dataloader.start) // constants.BATCH_SIZE
 
 lr_fn = f.learning_rate_with_decay(
         constants.BATCH_SIZE, batch_denom=128, batches_per_epoch=batches_per_epoch, boundary_epochs=[60, 100, 140],
@@ -44,12 +44,15 @@ f_nfe_meter = f.RunningAverageMeter()
 b_nfe_meter = f.RunningAverageMeter()
 end = time.time()
 
-print('Number of parameters: {}'.format(f.count_parameters(model)))
 print("Training Start")
 
 for itr in range(constants.NEPOCHS):
     for batch_turn in range(batches_per_epoch):
-        x, y = f.data_loader(dataset=train_dataset, batch_turn=batch_turn, size=constants.BATCH_SIZE)
+        x, y = train_dataloader.next(constants.BATCH_SIZE)
+
+        print(psutil.cpu_percent())
+        print("memory use:", psutil.virtual_memory()[2])
+
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr_fn(itr * batches_per_epoch + batch_turn)
         optimizer.zero_grad()
@@ -73,10 +76,9 @@ for itr in range(constants.NEPOCHS):
         end = time.time()
         print("[%d] Completed one batch" % batch_turn)
 
-    random.shuffle(train_dataset)
     with torch.no_grad():
-        train_acc = f.accuracy(model, train_eval_dataset)
-        val_acc = f.accuracy(model, test_dataset)
+        train_acc = f.accuracy(model, test_dataloader)
+        val_acc = f.accuracy(model, val_dataloader)
         '''if val_acc > best_acc:
                 torch.save({'state_dict': model.state_dict(), 'args': args}, os.path.join(args.save, 'model.pth'))
                 best_acc = val_acc
@@ -84,4 +86,3 @@ for itr in range(constants.NEPOCHS):
         print(
                 "Epoch {:04d} | Time {:.3f} ({:.3f}) | NFE-F {:.1f} | NFE-B {:.1f} | Train Acc {:.4f} | Test Acc {:.4f}".format( itr // batches_per_epoch, batch_time_meter.val, batch_time_meter.avg, f_nfe_meter.avg, b_nfe_meter.avg, train_acc, val_acc )
             )
-

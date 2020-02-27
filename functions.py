@@ -10,12 +10,12 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import constants
 from nasbench import api
-from torchdiffeq import odeint
-
+from torchdiffeq import odeint_adjoint as odeint
+#from torchdiffeq import odeint
 
 # Use nasbench_full.tfrecord for full dataset (run download command above).
-nasbench_api = api.NASBench('nasbench_only108.tfrecord')
-
+nasbench_api = api.NASBench('.data/nasbench_only108.tfrecord')
+nasbench_hashkeys = nasbench_api.hash_iterator()
 
 '''
 Encode & Decode
@@ -86,50 +86,53 @@ Generate Data
 '''
 
 
-def generate_data(batch_size=100, validation_ratio=0.1, test_ratio=0.1):
-    def run_experiment(mat, op):
+class DataLoader(object):
+    def __init__(self, start, end):
+        self.start = start
+        self.end = end
+        self.cur = start
+
+    def __run_experiment(self, mat, op):
         model_spec = api.ModelSpec(matrix=mat, ops=op)
         q = nasbench_api.query(model_spec)
-
         return q['validation_accuracy'], q['training_time']
 
-    def train_val_test_split(dataset):
-        random.shuffle(dataset)
-        total_size = (len(dataset) // batch_size) * batch_size
-        dataset = dataset[: total_size]
-        val_size = int(total_size * validation_ratio)
-        test_size = int(total_size * test_ratio)
+    def next(self, batchsize):
+        global nasbench_hashkeys
 
-        val, dataset = dataset[:val_size], dataset[val_size:]
-        test, train = dataset[:test_size], dataset[test_size:]
+        xset = []
+        yset = []
+        if self.cur == self.end:
+            self.cur = self.end
+        for idx in range(self.cur, min(self.cur + batchsize, self.end)):
+            hash_val = nasbench_hashkeys[idx]
+            fixed_stat, _ = nasbench_api.get_metrics_from_hash(hash_val)
+            mat, op = fixed_stat['module_adjacency'], fixed_stat['module_operations']
+            x = encode(mat, op)
+            y = self.__run_experiment(mat, op)
+            xset.append(x)
+            yset.append(y)
+        xset = torch.FloatTensor(xset)
+        yset = torch.FloatTensor(yset)
+        return xset, yset
 
-        return train, val, test
 
-    def is_target_graph(mat, op):
-        return np.sum(mat) == constants.EDGE_NUM
+def train_val_test_split(batch_size=100, validation_ratio=0.1, test_ratio=0.1):
+    global nasbench_hashkeys
 
-    # Find every possible graph
-    dataset = []
-    for hash_val in nasbench_api.hash_iterator():
+    revised = []
+    for hash_val in nasbench_hashkeys:
         fixed_stat, _ = nasbench_api.get_metrics_from_hash(hash_val)
         mat, op = fixed_stat['module_adjacency'], fixed_stat['module_operations']
-        if is_target_graph(mat, op):
-            x = encode(mat, op)
-            y = run_experiment(mat, op)
-            dataset.append((x, y))
+        if np.sum(mat) == constants.EDGE_NUM:
+            revised.append(hash_val)
 
-    return train_val_test_split(dataset)
+    total_size = (len(revised) // batch_size) * batch_size
+    nasbench_hashkeys = revised[: total_size]
+    val_size = int(total_size * validation_ratio)
+    test_size = int(total_size * test_ratio)
 
-
-def data_loader(dataset, batch_turn, size):
-    xset = []
-    yset = []
-    for x, y in dataset[size * batch_turn: size * batch_turn + size]:
-        xset.append(x)
-        yset.append(y)
-    xset = torch.FloatTensor(xset)
-    yset = torch.FloatTensor(yset)
-    return xset, yset
+    return DataLoader(val_size+test_size, total_size), DataLoader(0, val_size), DataLoader(val_size, val_size+test_size)
 
 
 '''
@@ -164,6 +167,7 @@ class ODEfunc(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.conv1 = ConcatConv1d(dim, dim, 3, 1, 1)
         self.norm2 = norm(dim)
+        self.relu2 = nn.ReLU(inplace=True)
         self.conv2 = ConcatConv1d(dim, dim, 3, 1, 1)
         self.norm3 = norm(dim)
         self.nfe = 0
@@ -189,8 +193,7 @@ class ODEBlock(nn.Module):
 
     def forward(self, x):
         self.integration_time = self.integration_time.type_as(x)
-        #batch_t = T_series[:x.shape[0]]
-        out = odeint(self.odefunc, x, self.integration_time , rtol=constants.RTOL, atol=constants.ATOL, method = 'adams')
+        out = odeint(self.odefunc, x, self.integration_time, rtol=constants.RTOL, atol=constants.ATOL, method = 'adams')
         return out[1]
 
     @property
@@ -251,14 +254,15 @@ def learning_rate_with_decay(batch_size, batch_denom, batches_per_epoch, boundar
     return learning_rate_fn
 
 
-def accuracy(model, dataset):
-    x, y = data_loader(dataset=dataset, batch_turn=0, size=len(dataset))
+def accuracy(model, dataloader):
+    datasize = dataloader.end - dataloader.start
+    x, y = dataloader.next(datasize)
     x = torch.FloatTensor(x)
     x = x.to(constants.DEVICE)
     y = y.numpy()
     result = model(x).cpu().detach().numpy()
     total_correct = np.sum(np.square(result - y))
-    return total_correct / len(dataset)
+    return total_correct / datasize
 
 
 def count_parameters(model):
