@@ -70,16 +70,20 @@ def max_index(output):
 
 def decode(encoded):
     mat = np.zeros((7, 7))
-    op = [constants.INPUT] + [constants.CONV3X3 for _ in range(5)] + [constants.OUTPUT]
+    ops = [constants.INPUT] + [constants.CONV3X3 for _ in range(5)] + [constants.OUTPUT]
 
     for embed in encoded:
         inbound, op, outbound = np.nonzero(np.array(embed))[0]
         op -= 7
         outbound -= (7 + len(constants.ALLOWED_OPS))
+        ops[outbound] = constants.ALLOWED_OPS[op]
+        if inbound > outbound:
+            (inbound, outbound) = (outbound, inbound)
+        elif inbound == outbound:
+            continue
         mat[inbound][outbound] = 1
-        op[outbound] = constants.ALLOWED_OPS[op]
 
-    return mat.tolist(), op
+    return mat.tolist(), ops
 
 
 '''

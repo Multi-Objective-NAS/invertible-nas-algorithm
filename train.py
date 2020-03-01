@@ -113,16 +113,17 @@ for itr in range(min(train_size, search_size)):
     # ode back
     z_tn = torch.from_numpy(z_tn).to(DEVICE)
     z_t0 = f.odeint(ODEf, z_tn, torch.tensor([1, 0]).float().type_as(z_tn), rtol=constants.RTOL, atol=constants.ATOL,
-                    method='adams')
+                    method='adams')[1]
 
-    assert z_t0.shape[0] == (1, 9, 18)
+    assert z_t0.shape == (1, 9, 18)
 
+    z_t0 = z_t0.cpu().detach().numpy()
     encoded = f.max_index(z_t0)
     mat, op = f.decode(encoded)
     print("y:", y)
 
 
-    def __run_experiment(self, mat, op):
+    def __run_experiment(mat, op):
         model_spec = api.ModelSpec(matrix=mat, ops=op)
         q = f.nasbench_api.query(model_spec)
         return q['validation_accuracy'], q['training_time']
